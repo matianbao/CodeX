@@ -1,0 +1,2 @@
+trade_date,total_turnover_billion,sh_index_pct,sz_index_pct,cyb_index_pct,up_count,down_count,flat_count,limit_up_count,limit_down_count,northbound_net_billion,margin_balance_billion,margin_balance_change_billion,defensive_leadership,notes
+2026-03-19,24680,0.38,-0.12,-0.45,1980,3080,120,62,9,18.6,25880,-12.4,true,CSV样例
