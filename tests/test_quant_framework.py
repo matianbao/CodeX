@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from examples.run_volume_pullback_backtest import run_demo
 from quant.backtest.analyzer import Analyzer
+from quant.backtest.visualizer import BacktestVisualizer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
@@ -218,7 +219,36 @@ def test_backtest_engine_can_run_volume_pullback_breakout_strategy():
     assert result.total_return >= 0
 
 
-def test_mock_backtest_demo_runs_end_to_end():
-    analysis, fills = run_demo()
+def test_visualizer_creates_svg_and_html_report(tmp_path):
+    bars = build_volume_pattern_bars()
+    repository = DataRepository(MockDataSource({"000001": bars}))
+    scheduler = Scheduler([bar.dt for bar in bars])
+    strategy = Strategy(
+        signal_model=VolumePullbackBreakoutSignalModel(
+            breakout_lookback=4,
+            breakout_volume_multiplier=1.8,
+            breakout_return_threshold=0.04,
+            pullback_bars=2,
+            pullback_volume_ratio=0.7,
+            pullback_price_buffer=0.03,
+            restart_volume_multiplier=1.2,
+        ),
+        position_sizer=FixedSizePositionSizer(fixed_qty=100),
+    )
+    broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    result, analysis = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8).run_with_analysis("000001")
+
+    html_path, svg_path = BacktestVisualizer().save_report(result, analysis, tmp_path, report_name="demo_report")
+
+    assert html_path.exists()
+    assert svg_path.exists()
+    assert "Equity Curve" in html_path.read_text(encoding="utf-8")
+    assert "<svg" in svg_path.read_text(encoding="utf-8")
+
+
+def test_mock_backtest_demo_runs_end_to_end(tmp_path):
+    analysis, fills, html_path, svg_path = run_demo(tmp_path)
     assert analysis["num_trades"] == 1.0
     assert fills == [("000001", 100)]
+    assert html_path.exists()
+    assert svg_path.exists()

@@ -8,9 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
+from quant.backtest.visualizer import BacktestVisualizer
 from quant.data.datasource import MockDataSource
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
@@ -50,7 +50,7 @@ def build_mock_bars(symbol: str = "000001") -> list[Bar]:
     return bars
 
 
-def run_demo() -> tuple[dict[str, float], list[tuple[str, int]]]:
+def run_demo(output_dir: str | Path = ROOT / "artifacts") -> tuple[dict[str, float], list[tuple[str, int]], Path, Path]:
     symbol = "000001"
     bars = build_mock_bars(symbol)
     repository = DataRepository(MockDataSource({symbol: bars}))
@@ -71,10 +71,13 @@ def run_demo() -> tuple[dict[str, float], list[tuple[str, int]]]:
     engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
     result, analysis = engine.run_with_analysis(symbol)
     fills = [(fill.symbol, fill.qty) for fill in result.fills]
-    return analysis, fills
+    html_path, svg_path = BacktestVisualizer().save_report(result, analysis, output_dir=output_dir, report_name="volume_pullback_report")
+    return analysis, fills, html_path, svg_path
 
 
 if __name__ == "__main__":
-    analysis, fills = run_demo()
+    analysis, fills, html_path, svg_path = run_demo()
     print("analysis=", analysis)
     print("fills=", fills)
+    print("html_report=", html_path)
+    print("svg_chart=", svg_path)
