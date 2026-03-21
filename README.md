@@ -125,6 +125,32 @@ pytest -q
 python examples/run_volume_pullback_backtest.py
 ```
 
+### 4.4 运行全链路调试函数
+
+如果你想直接观察每个时间点经过“数据 -> 信号 -> 仓位 -> 订单 -> 成交 -> 净值”的中间输出，可以执行：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_debug_demo
+
+analysis, trace_steps = run_debug_demo(print_trace=True)
+print(analysis)
+print(trace_steps[-1])
+PY
+```
+
+这个调试入口会打印每一步的：
+
+- 当前 bar 收盘价
+- 历史窗口长度
+- 信号类型与分数
+- 原始目标仓位
+- 风控后的最终仓位
+- 订单数量
+- 成交结果
+- 当前净值
+
+
 运行后会输出：
 
 - 回测分析指标 `analysis`

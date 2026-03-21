@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from quant.backtest.debug import BacktestDebugger
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.backtest.visualizer import BacktestVisualizer
@@ -50,8 +51,7 @@ def build_mock_bars(symbol: str = "000001") -> list[Bar]:
     return bars
 
 
-def run_demo(output_dir: str | Path = ROOT / "artifacts") -> tuple[dict[str, float], list[tuple[str, int]], Path, Path]:
-    symbol = "000001"
+def build_demo_components(symbol: str = "000001") -> tuple[str, DataRepository, Scheduler, Strategy, SimulatedBroker]:
     bars = build_mock_bars(symbol)
     repository = DataRepository(MockDataSource({symbol: bars}))
     scheduler = Scheduler([bar.dt for bar in bars])
@@ -68,11 +68,38 @@ def run_demo(output_dir: str | Path = ROOT / "artifacts") -> tuple[dict[str, flo
         position_sizer=FixedSizePositionSizer(fixed_qty=100),
     )
     broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    return symbol, repository, scheduler, strategy, broker
+
+
+def run_demo(output_dir: str | Path = ROOT / "artifacts") -> tuple[dict[str, float], list[tuple[str, int]], Path, Path]:
+    symbol, repository, scheduler, strategy, broker = build_demo_components()
     engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
     result, analysis = engine.run_with_analysis(symbol)
     fills = [(fill.symbol, fill.qty) for fill in result.fills]
     html_path, svg_path = BacktestVisualizer().save_report(result, analysis, output_dir=output_dir, report_name="volume_pullback_report")
     return analysis, fills, html_path, svg_path
+
+
+def run_debug_demo(print_trace: bool = True) -> tuple[dict[str, float], list[dict[str, object]]]:
+    symbol, repository, scheduler, strategy, broker = build_demo_components()
+    debugger = BacktestDebugger(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
+    _, analysis, trace_steps = debugger.run(symbol, print_trace=print_trace)
+    trace_payload = [
+        {
+            "dt": step.dt,
+            "bar_close": step.bar_close,
+            "history_size": step.history_size,
+            "signal_type": step.signal_type,
+            "signal_score": step.signal_score,
+            "raw_target_qty": step.raw_target_qty,
+            "final_target_qty": step.final_target_qty,
+            "order_count": step.order_count,
+            "fills": [(fill.symbol, fill.qty) for fill in step.fills],
+            "equity": step.equity,
+        }
+        for step in trace_steps
+    ]
+    return analysis, trace_payload
 
 
 if __name__ == "__main__":
@@ -81,3 +108,7 @@ if __name__ == "__main__":
     print("fills=", fills)
     print("html_report=", html_path)
     print("svg_chart=", svg_path)
+    print("\n=== DEBUG TRACE ===")
+    debug_analysis, trace_steps = run_debug_demo(print_trace=True)
+    print("debug_analysis=", debug_analysis)
+    print("trace_steps=", trace_steps)

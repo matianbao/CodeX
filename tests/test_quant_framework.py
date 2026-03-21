@@ -4,8 +4,9 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from examples.run_volume_pullback_backtest import run_demo
+from examples.run_volume_pullback_backtest import run_debug_demo, run_demo
 from quant.backtest.analyzer import Analyzer
+from quant.backtest.debug import BacktestDebugger
 from quant.backtest.visualizer import BacktestVisualizer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
@@ -394,3 +395,36 @@ def test_tushare_data_source_runs_downstream_pipeline_with_mocked_response():
     assert len(result.fills) == 1
     assert result.fills[0].qty == 100
     assert analysis["num_trades"] == 1.0
+
+
+def test_backtest_debugger_and_debug_demo_expose_intermediate_outputs(capsys):
+    bars = build_volume_pattern_bars()
+    repository = DataRepository(MockDataSource({"000001": bars}))
+    scheduler = Scheduler([bar.dt for bar in bars])
+    strategy = Strategy(
+        signal_model=VolumePullbackBreakoutSignalModel(
+            breakout_lookback=4,
+            breakout_volume_multiplier=1.8,
+            breakout_return_threshold=0.04,
+            pullback_bars=2,
+            pullback_volume_ratio=0.7,
+            pullback_price_buffer=0.03,
+            restart_volume_multiplier=1.2,
+        ),
+        position_sizer=FixedSizePositionSizer(fixed_qty=100),
+    )
+    broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    debugger = BacktestDebugger(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
+
+    result, analysis, trace_steps = debugger.run("000001", print_trace=True)
+    printed = capsys.readouterr().out
+    debug_analysis, debug_steps = run_debug_demo(print_trace=False)
+
+    assert len(trace_steps) == len(bars)
+    assert trace_steps[-1].signal_type == "LONG"
+    assert trace_steps[-1].order_count == 1
+    assert len(result.fills) == 1
+    assert analysis["num_trades"] == 1.0
+    assert "signal_type='LONG'" in printed
+    assert debug_analysis["num_trades"] == 1.0
+    assert debug_steps[-1]["fills"] == [("000001", 100)]
