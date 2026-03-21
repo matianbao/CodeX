@@ -51,7 +51,6 @@
 - `MockDataSource` / `InMemoryDataSource`：用于测试与示例
 - `AShareDailyDataSource`：A 股日线数据源实现
 - `DataRepository`：统一数据访问门面
-- `LatestSignalScreener`：在股票池上扫描最新满足策略条件的股票列表
 - `Bar`：标准 K 线结构
 
 > 当前建议在开发和测试阶段优先使用 `MockDataSource`，将网络和外部依赖隔离出去。
@@ -66,6 +65,7 @@
 - `FixedSizePositionSizer`：固定数量仓位模型
 - `RiskRuleChain`：风控规则链
 - `Strategy`：策略聚合门面
+- `LatestSignalScreener`：在股票池上扫描最新满足策略条件的股票列表
 
 ### 2.3 执行层 `quant.execution`
 
@@ -153,7 +153,7 @@ PY
 
 ### 4.5 扫描最新满足策略要求的 A 股列表
 
-现在可以直接扫描最近 N 个月（默认 3 个月，可配置）的 A 股日线数据，并返回最新满足策略要求的股票列表：
+现在可以直接扫描最近 N 个月（默认 3 个月，可配置）的 A 股日线数据，并返回**最新满足策略要求的股票列表**：
 
 ```bash
 python - <<'PY'
@@ -172,7 +172,46 @@ PY
 - 在策略层仅评估最新一个交易日
 - 返回满足策略条件的股票列表
 
-### 4.5 日志输出
+返回结果示例：
+
+```python
+{
+    "symbol": "000001",
+    "dt": datetime(...),
+    "signal_type": "LONG",
+    "signal_score": 0.0135,
+    "latest_close": 11.25,
+    "order_count": 1,
+    "selected": True,
+}
+```
+
+常用参数：
+
+- `lookback_months`：最近几个月的数据窗口，默认 `3`
+- `symbols`：可传入自定义股票池；不传则自动抓取当前 A 股股票列表
+- `selected_only`：是否仅返回满足条件的股票，默认 `True`
+- `enable_logging`：是否输出 INFO 日志，默认 `True`
+
+如果你只想扫描指定股票池，也可以这样运行：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_latest_signal_scan
+
+results = run_latest_signal_scan(
+    lookback_months=6,
+    symbols=["000001", "000333", "600519"],
+    selected_only=False,
+)
+for item in results:
+    print(item)
+PY
+```
+
+> 注意：A 股在线数据依赖外部接口可用性与访问频率限制；开发/测试场景仍建议优先使用 `MockDataSource` 或本地 CSV。
+
+### 4.6 日志输出
 
 关键环节现在都增加了日志输出，包括：
 
