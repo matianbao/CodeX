@@ -200,6 +200,7 @@ artifacts/
 - `AShareDailyDataSource`：轻量 A 股在线拉取
 - `TushareDailyDataSource`：更规范的 A 股数据接口
 - `DataSourceFactory`：统一创建入口
+- `FallbackDataSource`：本地优先、线上兜底
 
 更详细的对比和选择说明见 `docs/data_sources.md`。
 

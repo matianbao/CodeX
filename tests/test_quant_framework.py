@@ -10,7 +10,7 @@ from quant.backtest.visualizer import BacktestVisualizer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
-from quant.data.datasource import AShareDailyDataSource, CsvDataSource, MockDataSource, TushareDailyDataSource
+from quant.data.datasource import AShareDailyDataSource, CsvDataSource, FallbackDataSource, MockDataSource, TushareDailyDataSource
 from quant.data.factory import DataSourceFactory
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
@@ -303,3 +303,94 @@ def test_data_source_factory_creates_expected_types(tmp_path):
     assert isinstance(csv_source, CsvDataSource)
     assert isinstance(ashare_source, AShareDailyDataSource)
     assert isinstance(tushare_source, TushareDailyDataSource)
+
+
+def test_fallback_data_source_prefers_first_non_empty_source(tmp_path):
+    csv_path = tmp_path / "AAPL.csv"
+    csv_path.write_text("dt,open,high,low,close\n2024-01-01,1,2,0.5,1.5\n", encoding="utf-8")
+    empty_source = MockDataSource({})
+    csv_source = CsvDataSource(tmp_path)
+    datasource = FallbackDataSource([empty_source, csv_source])
+
+    bars = datasource.get_bars("AAPL")
+
+    assert datasource.get_symbols() == ["AAPL"]
+    assert len(bars) == 1
+    assert bars[0].close == 1.5
+
+
+def test_csv_data_source_runs_full_backtest_pipeline(tmp_path):
+    csv_path = tmp_path / "000001.csv"
+    rows = [
+        "dt,open,high,low,close,volume,amount",
+        "2024-01-01,10.0,10.3,9.9,10.2,1000,10200",
+        "2024-01-02,10.2,10.4,10.1,10.3,1100,11330",
+        "2024-01-03,10.3,10.5,10.2,10.4,1050,10920",
+        "2024-01-04,10.4,10.6,10.3,10.5,1000,10500",
+        "2024-01-05,10.5,11.2,10.5,11.1,2400,26640",
+        "2024-01-06,11.05,11.0,10.9,10.95,1300,14235",
+        "2024-01-07,10.95,10.98,10.88,10.92,1100,12012",
+        "2024-01-08,10.98,11.3,10.97,11.25,1500,16875",
+    ]
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    repository = DataRepository(DataSourceFactory.create("csv", base_path=tmp_path))
+    bars = repository.get_bars("000001")
+    scheduler = Scheduler([bar.dt for bar in bars])
+    strategy = Strategy(
+        signal_model=VolumePullbackBreakoutSignalModel(
+            breakout_lookback=4,
+            breakout_volume_multiplier=1.8,
+            breakout_return_threshold=0.04,
+            pullback_bars=2,
+            pullback_volume_ratio=0.7,
+            pullback_price_buffer=0.03,
+            restart_volume_multiplier=1.2,
+        ),
+        position_sizer=FixedSizePositionSizer(fixed_qty=100),
+    )
+    broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    result, analysis = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8).run_with_analysis("000001")
+
+    assert len(result.fills) == 1
+    assert result.fills[0].symbol == "000001"
+    assert analysis["num_trades"] == 1.0
+
+
+def test_tushare_data_source_runs_downstream_pipeline_with_mocked_response():
+    payload = {
+        "data": {
+            "items": [
+                ["000001.SZ", "20240101", 10.0, 10.3, 9.9, 10.2, 1000, 10200],
+                ["000001.SZ", "20240102", 10.2, 10.4, 10.1, 10.3, 1100, 11330],
+                ["000001.SZ", "20240103", 10.3, 10.5, 10.2, 10.4, 1050, 10920],
+                ["000001.SZ", "20240104", 10.4, 10.6, 10.3, 10.5, 1000, 10500],
+                ["000001.SZ", "20240105", 10.5, 11.2, 10.5, 11.1, 2400, 26640],
+                ["000001.SZ", "20240106", 11.05, 11.0, 10.9, 10.95, 1300, 14235],
+                ["000001.SZ", "20240107", 10.95, 10.98, 10.88, 10.92, 1100, 12012],
+                ["000001.SZ", "20240108", 10.98, 11.3, 10.97, 11.25, 1500, 16875],
+            ]
+        }
+    }
+    with patch("quant.data.datasource.urlopen", return_value=FakeResponse(payload)):
+        repository = DataRepository(TushareDailyDataSource(token="demo-token", symbols=["000001.SZ"]))
+        bars = repository.get_bars("000001")
+        scheduler = Scheduler([bar.dt for bar in bars])
+        strategy = Strategy(
+            signal_model=VolumePullbackBreakoutSignalModel(
+                breakout_lookback=4,
+                breakout_volume_multiplier=1.8,
+                breakout_return_threshold=0.04,
+                pullback_bars=2,
+                pullback_volume_ratio=0.7,
+                pullback_price_buffer=0.03,
+                restart_volume_multiplier=1.2,
+            ),
+            position_sizer=FixedSizePositionSizer(fixed_qty=100),
+        )
+        broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+        result, analysis = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8).run_with_analysis("000001")
+
+    assert len(result.fills) == 1
+    assert result.fills[0].qty == 100
+    assert analysis["num_trades"] == 1.0

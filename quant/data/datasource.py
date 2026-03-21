@@ -75,6 +75,26 @@ class CsvDataSource(DataSource):
         return sorted(bars, key=lambda bar: bar.dt)
 
 
+class FallbackDataSource(DataSource):
+    def __init__(self, sources: list[DataSource]) -> None:
+        if not sources:
+            raise ValueError("sources must not be empty")
+        self.sources = sources
+
+    def get_symbols(self) -> list[str]:
+        symbols: set[str] = set()
+        for source in self.sources:
+            symbols.update(source.get_symbols())
+        return sorted(symbols)
+
+    def get_bars(self, symbol: str, start: datetime | None = None, end: datetime | None = None) -> BarSeries:
+        for source in self.sources:
+            bars = source.get_bars(symbol, start=start, end=end)
+            if bars:
+                return bars
+        return []
+
+
 class AShareDailyDataSource(DataSource):
     """Fetch A-share daily bars from the Eastmoney kline endpoint."""
 

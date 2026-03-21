@@ -18,6 +18,7 @@
 | `CsvDataSource` | 本地研究、历史回测 | 易管理、易缓存、可复现 | 需要自行准备数据文件 | **优先落地** |
 | `AShareDailyDataSource` | 轻量 A 股在线拉取 | 接入简单、适合快速验证 | 依赖公开接口稳定性 | **作为在线扩展** |
 | `TushareDailyDataSource` | 更规范的 A 股研究流 | 数据字段体系较标准 | 需要 token，接口依赖外部服务 | **作为正式接入候选** |
+| `FallbackDataSource` | 本地缓存 + 在线补齐 | 优先命中本地，缺失时再降级 | 需要组合配置 | **建议用于生产前过渡** |
 
 ---
 
@@ -75,6 +76,7 @@
 - `CsvDataSource`
 - `AShareDailyDataSource`
 - `TushareDailyDataSource`
+- `FallbackDataSource`
 - `DataSourceFactory`
 
 这意味着现在可以通过统一接口切换数据来源，而不需要改策略层和回测层代码。
@@ -87,3 +89,13 @@
 2. 增加本地缓存与下载同步命令
 3. 给 `TushareDailyDataSource` 增加更多接口（如复权、指数、日历）
 4. 增加多数据源 fallback / merge 能力
+
+
+## 6. 联调建议
+
+建议优先验证下面两类联调路径：
+
+1. `CsvDataSource -> DataRepository -> Strategy -> BacktestEngine`
+2. `TushareDailyDataSource (mock response) -> DataRepository -> Strategy -> BacktestEngine`
+
+这样可以同时验证：数据解析、仓位生成、执行落地、结果沉淀是否按预期执行。

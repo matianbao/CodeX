@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .datasource import AShareDailyDataSource, CsvDataSource, DataSource, MockDataSource, TushareDailyDataSource
+from .datasource import AShareDailyDataSource, CsvDataSource, DataSource, FallbackDataSource, MockDataSource, TushareDailyDataSource
 from .schema import Bar
 
 
@@ -23,6 +23,8 @@ class DataSourceFactory:
             return AShareDailyDataSource(symbols=kwargs.get("symbols"), adjust=kwargs.get("adjust", "qfq"))
         if normalized == "tushare":
             return TushareDailyDataSource(token=kwargs["token"], symbols=kwargs.get("symbols"))
+        if normalized == "fallback":
+            return FallbackDataSource(sources=kwargs["sources"])
         raise ValueError(f"Unsupported datasource kind: {kind}")
 
     @staticmethod
