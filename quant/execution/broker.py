@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 
 from quant.common.exceptions import InsufficientCashError, InvalidOrderError
+from quant.common.logging_utils import get_logger
 from quant.common.types import OrderSide, OrderStatus, PriceType
 from quant.data.schema import Bar
 
 from .account import Account
 from .order import Fill, Order, OrderRequest
+
+logger = get_logger("execution.broker")
 
 
 class CommissionModel(ABC):
@@ -68,6 +70,7 @@ class SimulatedBroker:
         self.execution_policy = execution_policy or CloseExecutionPolicy()
 
     def execute(self, order_request: OrderRequest, market_snapshot: Bar) -> Fill:
+        logger.info("broker_execute symbol=%s side=%s qty=%s dt=%s", order_request.symbol, order_request.side.value, order_request.qty, market_snapshot.dt.strftime("%Y-%m-%d"))
         if order_request.qty <= 0:
             raise InvalidOrderError("Order quantity must be positive")
 
@@ -96,7 +99,7 @@ class SimulatedBroker:
             position.apply_fill(order.side, order.qty, fill_price)
 
         order.status = OrderStatus.FILLED
-        return Fill(
+        fill = Fill(
             order_id=order.order_id,
             symbol=order.symbol,
             side=order.side,
@@ -106,3 +109,14 @@ class SimulatedBroker:
             dt=market_snapshot.dt,
             status=order.status,
         )
+        logger.info(
+            "fill_complete symbol=%s side=%s qty=%s price=%s commission=%s cash=%s position_qty=%s",
+            fill.symbol,
+            fill.side.value,
+            fill.qty,
+            fill.price,
+            fill.commission,
+            self.account.cash,
+            position.qty,
+        )
+        return fill

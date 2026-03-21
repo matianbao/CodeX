@@ -3,15 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pprint import pformat
 
+from quant.common.logging_utils import get_logger
 from quant.data.repository import DataRepository
 from quant.execution.broker import SimulatedBroker
 from quant.execution.order import Fill
 from quant.strategy.context import StrategyContext
-from quant.strategy.strategy import Strategy, StrategyDecision
+from quant.strategy.strategy import Strategy
 
 from .analyzer import Analyzer
 from .result import BacktestResult
 from .scheduler import Scheduler
+
+logger = get_logger("backtest.debug")
 
 
 @dataclass
@@ -46,6 +49,7 @@ class BacktestDebugger:
         self.window_size = window_size
 
     def run(self, symbol: str, print_trace: bool = True) -> tuple[BacktestResult, dict[str, float], list[TraceStep]]:
+        logger.info("debugger_start symbol=%s print_trace=%s", symbol, print_trace)
         result = BacktestResult()
         trace_steps: list[TraceStep] = []
         for dt in self.scheduler.timeline():
@@ -82,6 +86,9 @@ class BacktestDebugger:
                 equity=equity,
             )
             trace_steps.append(step)
+            logger.info("trace_step dt=%s signal=%s orders=%s fills=%s equity=%s", step.dt, step.signal_type, step.order_count, len(step.fills), step.equity)
             if print_trace:
                 print(pformat(step))
-        return result, self.analyzer.analyze(result), trace_steps
+        analysis = self.analyzer.analyze(result)
+        logger.info("debugger_finished symbol=%s metrics=%s", symbol, analysis)
+        return result, analysis, trace_steps

@@ -8,6 +8,7 @@ from examples.run_volume_pullback_backtest import run_debug_demo, run_demo
 from quant.backtest.analyzer import Analyzer
 from quant.backtest.debug import BacktestDebugger
 from quant.backtest.visualizer import BacktestVisualizer
+from quant.common.logging_utils import configure_logging
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
@@ -428,3 +429,22 @@ def test_backtest_debugger_and_debug_demo_expose_intermediate_outputs(capsys):
     assert "signal_type='LONG'" in printed
     assert debug_analysis["num_trades"] == 1.0
     assert debug_steps[-1]["fills"] == [("000001", 100)]
+
+
+def test_logging_covers_key_pipeline_stages(caplog, tmp_path):
+    configure_logging()
+    with caplog.at_level("INFO"):
+        analysis, fills, html_path, svg_path = run_demo(tmp_path, enable_logging=True)
+
+    log_output = "\n".join(record.getMessage() for record in caplog.records)
+
+    assert analysis["num_trades"] == 1.0
+    assert fills == [("000001", 100)]
+    assert html_path.exists()
+    assert svg_path.exists()
+    assert "run_demo_start" in log_output
+    assert "cache_miss symbol=000001" in log_output
+    assert "signal_generated symbol=000001 type=LONG" in log_output
+    assert "broker_execute symbol=000001 side=BUY qty=100" in log_output
+    assert "backtest_step_done symbol=000001 dt=2024-01-08" in log_output
+    assert "report_saved html=" in log_output

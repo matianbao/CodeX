@@ -3,9 +3,12 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
+from quant.common.logging_utils import get_logger
 from quant.common.types import OrderSide
 
 from .result import BacktestResult
+
+logger = get_logger("backtest.visualizer")
 
 
 class BacktestVisualizer:
@@ -119,10 +122,12 @@ class BacktestVisualizer:
 </html>'''
 
     def save_report(self, result: BacktestResult, analysis: dict[str, float], output_dir: str | Path, report_name: str = 'backtest_report') -> tuple[Path, Path]:
+        logger.info("save_report report_name=%s output_dir=%s", report_name, output_dir)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         svg_path = output_path / f'{report_name}_equity.svg'
         html_path = output_path / f'{report_name}.html'
         svg_path.write_text(self.render_equity_svg(result), encoding='utf-8')
         html_path.write_text(self.build_html_report(result, analysis, title=report_name.replace('_', ' ').title()), encoding='utf-8')
+        logger.info("report_saved html=%s svg=%s", html_path, svg_path)
         return html_path, svg_path

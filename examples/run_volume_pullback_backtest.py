@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from quant.backtest.debug import BacktestDebugger
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.backtest.visualizer import BacktestVisualizer
+from quant.common.logging_utils import configure_logging, get_logger
 from quant.data.datasource import MockDataSource
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
@@ -20,6 +22,8 @@ from quant.execution.broker import FixedCommissionModel, SimulatedBroker
 from quant.strategy.portfolio import FixedSizePositionSizer
 from quant.strategy.signal import VolumePullbackBreakoutSignalModel
 from quant.strategy.strategy import Strategy
+
+logger = get_logger("examples.volume_pullback")
 
 
 def build_mock_bars(symbol: str = "000001") -> list[Bar]:
@@ -52,6 +56,7 @@ def build_mock_bars(symbol: str = "000001") -> list[Bar]:
 
 
 def build_demo_components(symbol: str = "000001") -> tuple[str, DataRepository, Scheduler, Strategy, SimulatedBroker]:
+    logger.info("build_demo_components symbol=%s", symbol)
     bars = build_mock_bars(symbol)
     repository = DataRepository(MockDataSource({symbol: bars}))
     scheduler = Scheduler([bar.dt for bar in bars])
@@ -68,19 +73,27 @@ def build_demo_components(symbol: str = "000001") -> tuple[str, DataRepository, 
         position_sizer=FixedSizePositionSizer(fixed_qty=100),
     )
     broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    logger.info("demo_components_ready symbol=%s timeline=%s", symbol, len(scheduler.timeline()))
     return symbol, repository, scheduler, strategy, broker
 
 
-def run_demo(output_dir: str | Path = ROOT / "artifacts") -> tuple[dict[str, float], list[tuple[str, int]], Path, Path]:
+def run_demo(output_dir: str | Path = ROOT / "artifacts", enable_logging: bool = True) -> tuple[dict[str, float], list[tuple[str, int]], Path, Path]:
+    if enable_logging:
+        configure_logging(logging.INFO)
+    logger.info("run_demo_start output_dir=%s", output_dir)
     symbol, repository, scheduler, strategy, broker = build_demo_components()
     engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
     result, analysis = engine.run_with_analysis(symbol)
     fills = [(fill.symbol, fill.qty) for fill in result.fills]
     html_path, svg_path = BacktestVisualizer().save_report(result, analysis, output_dir=output_dir, report_name="volume_pullback_report")
+    logger.info("run_demo_finished fills=%s html=%s svg=%s", fills, html_path, svg_path)
     return analysis, fills, html_path, svg_path
 
 
-def run_debug_demo(print_trace: bool = True) -> tuple[dict[str, float], list[dict[str, object]]]:
+def run_debug_demo(print_trace: bool = True, enable_logging: bool = True) -> tuple[dict[str, float], list[dict[str, object]]]:
+    if enable_logging:
+        configure_logging(logging.INFO)
+    logger.info("run_debug_demo_start print_trace=%s", print_trace)
     symbol, repository, scheduler, strategy, broker = build_demo_components()
     debugger = BacktestDebugger(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
     _, analysis, trace_steps = debugger.run(symbol, print_trace=print_trace)
@@ -99,6 +112,7 @@ def run_debug_demo(print_trace: bool = True) -> tuple[dict[str, float], list[dic
         }
         for step in trace_steps
     ]
+    logger.info("run_debug_demo_finished steps=%s", len(trace_payload))
     return analysis, trace_payload
 
 
