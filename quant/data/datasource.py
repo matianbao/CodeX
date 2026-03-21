@@ -35,6 +35,10 @@ class InMemoryDataSource(DataSource):
         return sorted(self._data.keys())
 
 
+class MockDataSource(InMemoryDataSource):
+    """Semantic alias used by tests/examples when data is fully mocked."""
+
+
 class AShareDailyDataSource(DataSource):
     """Fetch A-share daily bars from the Eastmoney kline endpoint."""
 

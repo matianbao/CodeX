@@ -4,11 +4,12 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+from examples.run_volume_pullback_backtest import run_demo
 from quant.backtest.analyzer import Analyzer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
-from quant.data.datasource import AShareDailyDataSource, InMemoryDataSource
+from quant.data.datasource import AShareDailyDataSource, MockDataSource
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
 from quant.execution.account import Account
@@ -25,13 +26,10 @@ from quant.strategy.strategy import Strategy
 def build_bars(symbol: str = "AAPL") -> list[Bar]:
     start = datetime(2024, 1, 1)
     closes = [10, 11, 12, 13, 14, 15]
-    bars = []
-    for idx, close in enumerate(closes):
-        dt = start + timedelta(days=idx)
-        bars.append(
-            Bar(symbol=symbol, dt=dt, open=close - 0.5, high=close + 0.5, low=close - 1, close=close, volume=1000)
-        )
-    return bars
+    return [
+        Bar(symbol=symbol, dt=start + timedelta(days=idx), open=close - 0.5, high=close + 0.5, low=close - 1, close=close, volume=1000)
+        for idx, close in enumerate(closes)
+    ]
 
 
 def build_volume_pattern_bars(symbol: str = "000001") -> list[Bar]:
@@ -46,21 +44,10 @@ def build_volume_pattern_bars(symbol: str = "000001") -> list[Bar]:
         (10.95, 10.92, 10.98, 10.88, 1100),
         (10.98, 11.25, 11.3, 10.97, 1500),
     ]
-    bars = []
-    for idx, (open_, close, high, low, volume) in enumerate(payload):
-        bars.append(
-            Bar(
-                symbol=symbol,
-                dt=start + timedelta(days=idx),
-                open=open_,
-                high=high,
-                low=low,
-                close=close,
-                volume=volume,
-                amount=close * volume,
-            )
-        )
-    return bars
+    return [
+        Bar(symbol=symbol, dt=start + timedelta(days=idx), open=open_, high=high, low=low, close=close, volume=volume, amount=close * volume)
+        for idx, (open_, close, high, low, volume) in enumerate(payload)
+    ]
 
 
 class FakeResponse:
@@ -77,16 +64,15 @@ class FakeResponse:
         return False
 
 
-def test_data_source_and_repository_return_expected_values():
+def test_mock_data_source_and_repository_return_expected_values():
     bars = build_bars()
-    datasource = InMemoryDataSource({"AAPL": bars})
+    datasource = MockDataSource({"AAPL": bars})
     repository = DataRepository(datasource)
 
     assert datasource.get_symbols() == ["AAPL"]
     assert repository.get_symbols() == ["AAPL"]
     assert repository.get_bar("AAPL", bars[2].dt).close == 12
-    window = repository.get_window("AAPL", bars[4].dt, 3)
-    assert [bar.close for bar in window] == [12, 13, 14]
+    assert [bar.close for bar in repository.get_window("AAPL", bars[4].dt, 3)] == [12, 13, 14]
 
 
 def test_ashare_daily_data_source_parses_remote_payload():
@@ -113,8 +99,7 @@ def test_signal_model_position_sizer_and_risk_rule_chain():
     account = Account(cash=1000)
     context = StrategyContext(symbol="AAPL", dt=bars[-1].dt, current_bar=bars[-1], history=bars[-5:], account=account)
 
-    signal_model = MovingAverageCrossSignalModel(short_window=2, long_window=4)
-    signal = signal_model.generate(context)
+    signal = MovingAverageCrossSignalModel(short_window=2, long_window=4).generate(context)
     assert signal.signal_type == SignalType.LONG
     assert signal.metadata["short_ma"] == 14.5
     assert signal.metadata["long_ma"] == 13.5
@@ -156,19 +141,16 @@ def test_broker_account_position_and_fill_values():
         slippage_model=FixedSlippageModel(ticks=0.1),
     )
 
-    buy_request = OrderRequest(symbol="AAPL", side=OrderSide.BUY, qty=10, price_type=PriceType.CLOSE)
-    buy_fill = broker.execute(buy_request, bar)
+    buy_fill = broker.execute(OrderRequest(symbol="AAPL", side=OrderSide.BUY, qty=10, price_type=PriceType.CLOSE), bar)
     assert buy_fill.status == OrderStatus.FILLED
     assert round(buy_fill.price, 2) == 15.10
     assert round(buy_fill.commission, 3) == 0.151
     assert account.get_position_qty("AAPL") == 10
 
-    sell_request = OrderRequest(symbol="AAPL", side=OrderSide.SELL, qty=4, price_type=PriceType.CLOSE)
-    sell_fill = broker.execute(sell_request, bar)
+    sell_fill = broker.execute(OrderRequest(symbol="AAPL", side=OrderSide.SELL, qty=4, price_type=PriceType.CLOSE), bar)
     assert sell_fill.status == OrderStatus.FILLED
-    position = account.get_position("AAPL")
-    assert position.qty == 6
-    assert round(position.realized_pnl, 2) == -0.80
+    assert account.get_position("AAPL").qty == 6
+    assert round(account.get_position("AAPL").realized_pnl, 2) == -0.80
 
 
 def test_position_helpers_and_analyzer_outputs():
@@ -177,11 +159,10 @@ def test_position_helpers_and_analyzer_outputs():
     assert position.market_value(12) == 60
     assert position.unrealized_pnl(12) == 10
 
-    analyzer = Analyzer()
-    result_metrics = analyzer.analyze(
+    metrics = Analyzer().analyze(
         BacktestEngine(
             scheduler=Scheduler([]),
-            data_repository=DataRepository(InMemoryDataSource({"AAPL": build_bars()})),
+            data_repository=DataRepository(MockDataSource({"AAPL": build_bars()})),
             strategy=Strategy(
                 signal_model=MovingAverageCrossSignalModel(short_window=2, long_window=4),
                 position_sizer=FixedSizePositionSizer(fixed_qty=1),
@@ -189,12 +170,12 @@ def test_position_helpers_and_analyzer_outputs():
             broker=SimulatedBroker(Account(cash=1000)),
         ).run("AAPL")
     )
-    assert set(result_metrics) == {"total_return", "num_trades", "average_equity"}
+    assert set(metrics) == {"total_return", "num_trades", "average_equity", "ending_equity", "max_drawdown"}
 
 
 def test_backtest_engine_runs_end_to_end_and_returns_expected_result_shapes():
     bars = build_bars()
-    repository = DataRepository(InMemoryDataSource({"AAPL": bars}))
+    repository = DataRepository(MockDataSource({"AAPL": bars}))
     scheduler = Scheduler([bar.dt for bar in bars])
     strategy = Strategy(
         signal_model=MovingAverageCrossSignalModel(short_window=2, long_window=4),
@@ -202,20 +183,18 @@ def test_backtest_engine_runs_end_to_end_and_returns_expected_result_shapes():
         risk_rules=RiskRuleChain([MaxPositionRiskRule(max_qty=2)]),
     )
     broker = SimulatedBroker(account=Account(cash=1000), commission_model=FixedCommissionModel(rate=0.0))
-    engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=4)
-
-    result, analysis = engine.run_with_analysis("AAPL")
+    result, analysis = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=4).run_with_analysis("AAPL")
 
     assert len(result.equity_curve) == len(bars)
     assert len(result.positions_history) == len(bars)
     assert len(result.orders) == len(result.fills) == 3
     assert analysis["num_trades"] == 3.0
-    assert broker.account.get_position_qty("AAPL") == 6
+    assert result.latest_positions()["AAPL"] == 6
 
 
 def test_backtest_engine_can_run_volume_pullback_breakout_strategy():
     bars = build_volume_pattern_bars()
-    repository = DataRepository(InMemoryDataSource({"000001": bars}))
+    repository = DataRepository(MockDataSource({"000001": bars}))
     scheduler = Scheduler([bar.dt for bar in bars])
     strategy = Strategy(
         signal_model=VolumePullbackBreakoutSignalModel(
@@ -230,11 +209,16 @@ def test_backtest_engine_can_run_volume_pullback_breakout_strategy():
         position_sizer=FixedSizePositionSizer(fixed_qty=100),
     )
     broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
-    engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
-
-    result, analysis = engine.run_with_analysis("000001")
+    result, analysis = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8).run_with_analysis("000001")
 
     assert len(result.orders) == 1
     assert result.orders[0].symbol == "000001"
     assert result.fills[0].qty == 100
     assert analysis["num_trades"] == 1.0
+    assert result.total_return >= 0
+
+
+def test_mock_backtest_demo_runs_end_to_end():
+    analysis, fills = run_demo()
+    assert analysis["num_trades"] == 1.0
+    assert fills == [("000001", 100)]
