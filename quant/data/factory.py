@@ -20,7 +20,11 @@ class DataSourceFactory:
                 datetime_format=kwargs.get("datetime_format", "%Y-%m-%d"),
             )
         if normalized == "ashare":
-            return AShareDailyDataSource(symbols=kwargs.get("symbols"), adjust=kwargs.get("adjust", "qfq"))
+            return AShareDailyDataSource(
+                symbols=kwargs.get("symbols"),
+                adjust=kwargs.get("adjust", "qfq"),
+                lookback_months=kwargs.get("lookback_months", 3),
+            )
         if normalized == "tushare":
             return TushareDailyDataSource(token=kwargs["token"], symbols=kwargs.get("symbols"))
         if normalized == "fallback":

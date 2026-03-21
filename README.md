@@ -51,6 +51,7 @@
 - `MockDataSource` / `InMemoryDataSource`：用于测试与示例
 - `AShareDailyDataSource`：A 股日线数据源实现
 - `DataRepository`：统一数据访问门面
+- `LatestSignalScreener`：在股票池上扫描最新满足策略条件的股票列表
 - `Bar`：标准 K 线结构
 
 > 当前建议在开发和测试阶段优先使用 `MockDataSource`，将网络和外部依赖隔离出去。
@@ -149,6 +150,27 @@ PY
 - 订单数量
 - 成交结果
 - 当前净值
+
+### 4.5 扫描最新满足策略要求的 A 股列表
+
+现在可以直接扫描最近 N 个月（默认 3 个月，可配置）的 A 股日线数据，并返回最新满足策略要求的股票列表：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_latest_signal_scan
+
+results = run_latest_signal_scan(lookback_months=3, selected_only=True)
+for item in results[:10]:
+    print(item)
+PY
+```
+
+这个入口会：
+
+- 在数据层自动抓取当前 A 股股票池
+- 对每个标的拉取最近 `lookback_months` 个月日线
+- 在策略层仅评估最新一个交易日
+- 返回满足策略条件的股票列表
 
 ### 4.5 日志输出
 

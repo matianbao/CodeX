@@ -7,6 +7,7 @@ from .backtest.visualizer import BacktestVisualizer
 from .data.datasource import AShareDailyDataSource, MockDataSource
 from .data.repository import DataRepository
 from .execution.broker import SimulatedBroker
+from .strategy.screener import LatestSignalScreener
 from .strategy.strategy import Strategy
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "BacktestResult",
     "BacktestVisualizer",
     "DataRepository",
+    "LatestSignalScreener",
     "MockDataSource",
     "SimulatedBroker",
     "Strategy",

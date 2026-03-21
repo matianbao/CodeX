@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from examples.run_volume_pullback_backtest import run_debug_demo, run_demo
+from examples.run_volume_pullback_backtest import run_debug_demo, run_demo, run_latest_signal_scan
 from quant.backtest.analyzer import Analyzer
 from quant.backtest.debug import BacktestDebugger
 from quant.backtest.visualizer import BacktestVisualizer
@@ -23,6 +23,7 @@ from quant.execution.position import Position
 from quant.strategy.context import StrategyContext
 from quant.strategy.portfolio import FixedSizePositionSizer
 from quant.strategy.rule import MaxPositionRiskRule, RiskRuleChain
+from quant.strategy.screener import LatestSignalScreener
 from quant.strategy.signal import MovingAverageCrossSignalModel, VolumePullbackBreakoutSignalModel
 from quant.strategy.strategy import Strategy
 
@@ -96,6 +97,30 @@ def test_ashare_daily_data_source_parses_remote_payload():
     assert [bar.symbol for bar in bars] == ["000001", "000001"]
     assert bars[0].close == 10.5
     assert bars[1].volume == 111111.0
+
+
+def test_ashare_daily_data_source_fetches_current_symbol_list_when_unconfigured():
+    payload = {"data": {"diff": [{"f12": "000001"}, {"f12": "600519"}]}}
+    with patch("quant.data.datasource.urlopen", return_value=FakeResponse(payload)):
+        datasource = AShareDailyDataSource()
+        assert datasource.get_symbols() == ["000001", "600519"]
+
+
+def test_ashare_daily_data_source_uses_configurable_recent_lookback_window():
+    payload = {"data": {"klines": ["2024-03-01,10.00,10.50,10.80,9.90,123456,654321"]}}
+    captured_urls: list[str] = []
+
+    def fake_urlopen(request):
+        captured_urls.append(request.full_url)
+        return FakeResponse(payload)
+
+    with patch("quant.data.datasource.urlopen", side_effect=fake_urlopen):
+        datasource = AShareDailyDataSource(symbols=["000001"], lookback_months=6)
+        bars = datasource.get_bars("000001", end=datetime(2024, 3, 31))
+
+    assert bars[0].close == 10.5
+    assert "beg=20230930" in captured_urls[0]
+    assert "end=20240331" in captured_urls[0]
 
 
 def test_signal_model_position_sizer_and_risk_rule_chain():
@@ -448,3 +473,78 @@ def test_logging_covers_key_pipeline_stages(caplog, tmp_path):
     assert "broker_execute symbol=000001 side=BUY qty=100" in log_output
     assert "backtest_step_done symbol=000001 dt=2024-01-08" in log_output
     assert "report_saved html=" in log_output
+
+
+def test_latest_signal_screener_returns_symbols_matching_strategy():
+    matching = build_volume_pattern_bars("000001")
+    non_matching = build_bars("000002")
+    repository = DataRepository(MockDataSource({"000001": matching, "000002": non_matching}))
+    strategy = Strategy(
+        signal_model=VolumePullbackBreakoutSignalModel(
+            breakout_lookback=4,
+            breakout_volume_multiplier=1.8,
+            breakout_return_threshold=0.04,
+            pullback_bars=2,
+            pullback_volume_ratio=0.7,
+            pullback_price_buffer=0.03,
+            restart_volume_multiplier=1.2,
+        ),
+        position_sizer=FixedSizePositionSizer(fixed_qty=100),
+    )
+
+    results = LatestSignalScreener(repository=repository, strategy=strategy, window_size=8).scan(selected_only=True)
+
+    assert [item.symbol for item in results] == ["000001"]
+    assert results[0].signal_type == "LONG"
+    assert results[0].selected is True
+
+
+def test_run_latest_signal_scan_returns_selected_a_share_symbols():
+    symbol_payload = {"data": {"diff": [{"f12": "000001"}, {"f12": "000002"}]}}
+    bar_payloads = {
+        "000001": {
+            "data": {
+                "klines": [
+                    "2024-01-01,10.0,10.2,10.3,9.9,1000,10200",
+                    "2024-01-02,10.2,10.3,10.4,10.1,1100,11330",
+                    "2024-01-03,10.3,10.4,10.5,10.2,1050,10920",
+                    "2024-01-04,10.4,10.5,10.6,10.3,1000,10500",
+                    "2024-01-05,10.5,11.1,11.2,10.5,2400,26640",
+                    "2024-01-06,11.05,10.95,11.0,10.9,1300,14235",
+                    "2024-01-07,10.95,10.92,10.98,10.88,1100,12012",
+                    "2024-01-08,10.98,11.25,11.3,10.97,1500,16875",
+                ]
+            }
+        },
+        "000002": {
+            "data": {
+                "klines": [
+                    "2024-01-01,10,10,10,10,1000,10000",
+                    "2024-01-02,10,10,10,10,1000,10000",
+                    "2024-01-03,10,10,10,10,1000,10000",
+                    "2024-01-04,10,10,10,10,1000,10000",
+                    "2024-01-05,10,10,10,10,1000,10000",
+                    "2024-01-06,10,10,10,10,1000,10000",
+                    "2024-01-07,10,10,10,10,1000,10000",
+                    "2024-01-08,10,10,10,10,1000,10000",
+                ]
+            }
+        },
+    }
+
+    def fake_urlopen(request):
+        url = request.full_url
+        if "clist/get" in url:
+            return FakeResponse(symbol_payload)
+        if "secid=0.000001" in url:
+            return FakeResponse(bar_payloads["000001"])
+        if "secid=0.000002" in url:
+            return FakeResponse(bar_payloads["000002"])
+        raise AssertionError(url)
+
+    with patch("quant.data.datasource.urlopen", side_effect=fake_urlopen):
+        results = run_latest_signal_scan(lookback_months=3, symbols=None, selected_only=True, enable_logging=False)
+
+    assert [item["symbol"] for item in results] == ["000001"]
+    assert results[0]["signal_type"] == "LONG"
+    assert results[0]["selected"] is True
