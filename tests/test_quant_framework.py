@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from quant.backtest.analyzer import Analyzer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
-from quant.data.datasource import InMemoryDataSource
+from quant.data.datasource import AShareDailyDataSource, InMemoryDataSource
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
 from quant.execution.account import Account
@@ -16,7 +18,7 @@ from quant.execution.position import Position
 from quant.strategy.context import StrategyContext
 from quant.strategy.portfolio import FixedSizePositionSizer
 from quant.strategy.rule import MaxPositionRiskRule, RiskRuleChain
-from quant.strategy.signal import MovingAverageCrossSignalModel
+from quant.strategy.signal import MovingAverageCrossSignalModel, VolumePullbackBreakoutSignalModel
 from quant.strategy.strategy import Strategy
 
 
@@ -32,6 +34,49 @@ def build_bars(symbol: str = "AAPL") -> list[Bar]:
     return bars
 
 
+def build_volume_pattern_bars(symbol: str = "000001") -> list[Bar]:
+    start = datetime(2024, 1, 1)
+    payload = [
+        (10.0, 10.2, 10.3, 9.9, 1000),
+        (10.2, 10.3, 10.4, 10.1, 1100),
+        (10.3, 10.4, 10.5, 10.2, 1050),
+        (10.4, 10.5, 10.6, 10.3, 1000),
+        (10.5, 11.1, 11.2, 10.5, 2400),
+        (11.05, 10.95, 11.0, 10.9, 1300),
+        (10.95, 10.92, 10.98, 10.88, 1100),
+        (10.98, 11.25, 11.3, 10.97, 1500),
+    ]
+    bars = []
+    for idx, (open_, close, high, low, volume) in enumerate(payload):
+        bars.append(
+            Bar(
+                symbol=symbol,
+                dt=start + timedelta(days=idx),
+                open=open_,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+                amount=close * volume,
+            )
+        )
+    return bars
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self.payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 def test_data_source_and_repository_return_expected_values():
     bars = build_bars()
     datasource = InMemoryDataSource({"AAPL": bars})
@@ -42,6 +87,25 @@ def test_data_source_and_repository_return_expected_values():
     assert repository.get_bar("AAPL", bars[2].dt).close == 12
     window = repository.get_window("AAPL", bars[4].dt, 3)
     assert [bar.close for bar in window] == [12, 13, 14]
+
+
+def test_ashare_daily_data_source_parses_remote_payload():
+    payload = {
+        "data": {
+            "klines": [
+                "2024-01-02,10.00,10.50,10.80,9.90,123456,654321",
+                "2024-01-03,10.60,10.90,11.00,10.50,111111,777777",
+            ]
+        }
+    }
+    with patch("quant.data.datasource.urlopen", return_value=FakeResponse(payload)):
+        datasource = AShareDailyDataSource(symbols=["000001"])
+        bars = datasource.get_bars("sz000001")
+
+    assert datasource.get_symbols() == ["000001"]
+    assert [bar.symbol for bar in bars] == ["000001", "000001"]
+    assert bars[0].close == 10.5
+    assert bars[1].volume == 111111.0
 
 
 def test_signal_model_position_sizer_and_risk_rule_chain():
@@ -62,6 +126,25 @@ def test_signal_model_position_sizer_and_risk_rule_chain():
     adjusted = RiskRuleChain([MaxPositionRiskRule(max_qty=6)]).apply(target, context)
     assert adjusted.qty == 6
     assert adjusted.reason.endswith("capped")
+
+
+def test_volume_pullback_breakout_signal_generates_long_signal():
+    bars = build_volume_pattern_bars()
+    account = Account(cash=100000)
+    context = StrategyContext(symbol="000001", dt=bars[-1].dt, current_bar=bars[-1], history=bars, account=account)
+    signal = VolumePullbackBreakoutSignalModel(
+        breakout_lookback=4,
+        breakout_volume_multiplier=1.8,
+        breakout_return_threshold=0.04,
+        pullback_bars=2,
+        pullback_volume_ratio=0.7,
+        pullback_price_buffer=0.03,
+        restart_volume_multiplier=1.2,
+    ).generate(context)
+
+    assert signal.signal_type == SignalType.LONG
+    assert signal.metadata["breakout_close"] == 11.1
+    assert signal.metadata["restart_volume"] == 1500
 
 
 def test_broker_account_position_and_fill_values():
@@ -128,3 +211,30 @@ def test_backtest_engine_runs_end_to_end_and_returns_expected_result_shapes():
     assert len(result.orders) == len(result.fills) == 3
     assert analysis["num_trades"] == 3.0
     assert broker.account.get_position_qty("AAPL") == 6
+
+
+def test_backtest_engine_can_run_volume_pullback_breakout_strategy():
+    bars = build_volume_pattern_bars()
+    repository = DataRepository(InMemoryDataSource({"000001": bars}))
+    scheduler = Scheduler([bar.dt for bar in bars])
+    strategy = Strategy(
+        signal_model=VolumePullbackBreakoutSignalModel(
+            breakout_lookback=4,
+            breakout_volume_multiplier=1.8,
+            breakout_return_threshold=0.04,
+            pullback_bars=2,
+            pullback_volume_ratio=0.7,
+            pullback_price_buffer=0.03,
+            restart_volume_multiplier=1.2,
+        ),
+        position_sizer=FixedSizePositionSizer(fixed_qty=100),
+    )
+    broker = SimulatedBroker(account=Account(cash=100000), commission_model=FixedCommissionModel(rate=0.0))
+    engine = BacktestEngine(scheduler=scheduler, data_repository=repository, strategy=strategy, broker=broker, window_size=8)
+
+    result, analysis = engine.run_with_analysis("000001")
+
+    assert len(result.orders) == 1
+    assert result.orders[0].symbol == "000001"
+    assert result.fills[0].qty == 100
+    assert analysis["num_trades"] == 1.0
