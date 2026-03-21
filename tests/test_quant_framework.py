@@ -10,7 +10,8 @@ from quant.backtest.visualizer import BacktestVisualizer
 from quant.backtest.engine import BacktestEngine
 from quant.backtest.scheduler import Scheduler
 from quant.common.types import OrderSide, OrderStatus, PriceType, SignalType
-from quant.data.datasource import AShareDailyDataSource, MockDataSource
+from quant.data.datasource import AShareDailyDataSource, CsvDataSource, MockDataSource, TushareDailyDataSource
+from quant.data.factory import DataSourceFactory
 from quant.data.repository import DataRepository
 from quant.data.schema import Bar
 from quant.execution.account import Account
@@ -252,3 +253,53 @@ def test_mock_backtest_demo_runs_end_to_end(tmp_path):
     assert fills == [("000001", 100)]
     assert html_path.exists()
     assert svg_path.exists()
+
+
+def test_csv_data_source_reads_local_file(tmp_path):
+    csv_path = tmp_path / "AAPL.csv"
+    csv_path.write_text(
+        "dt,open,high,low,close,volume,amount\n"
+        "2024-01-01,10,11,9,10.5,1000,10500\n"
+        "2024-01-02,10.5,11.5,10,11,1200,13200\n",
+        encoding="utf-8",
+    )
+    datasource = CsvDataSource(tmp_path)
+    bars = datasource.get_bars("AAPL")
+
+    assert datasource.get_symbols() == ["AAPL"]
+    assert len(bars) == 2
+    assert bars[1].close == 11.0
+
+
+def test_tushare_daily_data_source_parses_remote_payload():
+    payload = {
+        "data": {
+            "items": [
+                ["000001.SZ", "20240102", 10.0, 10.8, 9.9, 10.5, 123456, 654321],
+                ["000001.SZ", "20240103", 10.6, 11.0, 10.5, 10.9, 111111, 777777],
+            ]
+        }
+    }
+    with patch("quant.data.datasource.urlopen", return_value=FakeResponse(payload)):
+        datasource = TushareDailyDataSource(token="demo-token", symbols=["000001.SZ"])
+        bars = datasource.get_bars("000001")
+
+    assert datasource.get_symbols() == ["000001.SZ"]
+    assert [bar.symbol for bar in bars] == ["000001", "000001"]
+    assert bars[0].close == 10.5
+    assert bars[1].volume == 111111.0
+
+
+def test_data_source_factory_creates_expected_types(tmp_path):
+    csv_path = tmp_path / "AAPL.csv"
+    csv_path.write_text("dt,open,high,low,close\n2024-01-01,1,1,1,1\n", encoding="utf-8")
+
+    mock_source = DataSourceFactory.create("mock", data={"AAPL": build_bars()})
+    csv_source = DataSourceFactory.create("csv", base_path=tmp_path)
+    ashare_source = DataSourceFactory.create("ashare", symbols=["000001"])
+    tushare_source = DataSourceFactory.create("tushare", token="demo-token", symbols=["000001.SZ"])
+
+    assert mock_source.get_symbols() == ["AAPL"]
+    assert isinstance(csv_source, CsvDataSource)
+    assert isinstance(ashare_source, AShareDailyDataSource)
+    assert isinstance(tushare_source, TushareDailyDataSource)

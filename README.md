@@ -191,6 +191,20 @@ artifacts/
 
 ---
 
+## 7. 数据源选择建议
+
+仓库当前已经开始把数据获取模块做成多数据源结构，优先支持：
+
+- `MockDataSource`：开发与测试
+- `CsvDataSource`：本地历史回测
+- `AShareDailyDataSource`：轻量 A 股在线拉取
+- `TushareDailyDataSource`：更规范的 A 股数据接口
+- `DataSourceFactory`：统一创建入口
+
+更详细的对比和选择说明见 `docs/data_sources.md`。
+
+---
+
 ## 7. 测试覆盖范围
 
 当前测试主要覆盖：
