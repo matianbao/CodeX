@@ -2,7 +2,7 @@ from .context import StrategyContext
 from .portfolio import FixedSizePositionSizer, PositionSizer, TargetPosition
 from .rule import MaxPositionRiskRule, NoOpRiskRule, RiskRule, RiskRuleChain
 from .screener import LatestSignalResult, LatestSignalScreener
-from .signal import MovingAverageCrossSignalModel, Signal, SignalModel, VolumePullbackBreakoutSignalModel
+from .signal import MovingAverageCrossSignalModel, Signal, SignalModel, ThemeStrongGPullbackSignalModel, VolumePullbackBreakoutSignalModel
 from .strategy import Strategy, StrategyDecision
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "RiskRuleChain",
     "Signal",
     "SignalModel",
+    "ThemeStrongGPullbackSignalModel",
     "Strategy",
     "StrategyDecision",
     "StrategyContext",

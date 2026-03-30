@@ -24,7 +24,7 @@ from quant.strategy.context import StrategyContext
 from quant.strategy.portfolio import FixedSizePositionSizer
 from quant.strategy.rule import MaxPositionRiskRule, RiskRuleChain
 from quant.strategy.screener import LatestSignalScreener
-from quant.strategy.signal import MovingAverageCrossSignalModel, VolumePullbackBreakoutSignalModel
+from quant.strategy.signal import MovingAverageCrossSignalModel, ThemeStrongGPullbackSignalModel, VolumePullbackBreakoutSignalModel
 from quant.strategy.strategy import Strategy
 
 
@@ -48,6 +48,24 @@ def build_volume_pattern_bars(symbol: str = "000001") -> list[Bar]:
         (11.05, 10.95, 11.0, 10.9, 1300),
         (10.95, 10.92, 10.98, 10.88, 1100),
         (10.98, 11.25, 11.3, 10.97, 1500),
+    ]
+    return [
+        Bar(symbol=symbol, dt=start + timedelta(days=idx), open=open_, high=high, low=low, close=close, volume=volume, amount=close * volume)
+        for idx, (open_, close, high, low, volume) in enumerate(payload)
+    ]
+
+
+def build_theme_strong_pullback_bars(symbol: str = "000777") -> list[Bar]:
+    start = datetime(2024, 1, 1)
+    payload = [
+        (10.0, 10.1, 10.2, 9.9, 1000),
+        (10.1, 10.2, 10.25, 10.0, 1050),
+        (10.2, 10.3, 10.35, 10.1, 1100),
+        (10.3, 10.45, 10.5, 10.25, 1200),
+        (10.45, 11.1, 11.2, 10.4, 2600),
+        (11.05, 10.92, 11.0, 10.88, 1300),
+        (10.92, 10.9, 10.95, 10.86, 1100),
+        (10.95, 11.35, 11.4, 10.94, 1500),
     ]
     return [
         Bar(symbol=symbol, dt=start + timedelta(days=idx), open=open_, high=high, low=low, close=close, volume=volume, amount=close * volume)
@@ -140,6 +158,27 @@ def test_signal_model_position_sizer_and_risk_rule_chain():
     adjusted = RiskRuleChain([MaxPositionRiskRule(max_qty=6)]).apply(target, context)
     assert adjusted.qty == 6
     assert adjusted.reason.endswith("capped")
+
+
+def test_theme_strong_g_pullback_signal_generates_long_signal():
+    bars = build_theme_strong_pullback_bars()
+    account = Account(cash=100000)
+    context = StrategyContext(symbol="000777", dt=bars[-1].dt, current_bar=bars[-1], history=bars, account=account)
+    signal = ThemeStrongGPullbackSignalModel(
+        fast_window=3,
+        slow_window=5,
+        strong_lookback=6,
+        breakout_return_threshold=0.05,
+        breakout_volume_multiplier=1.5,
+        pullback_bars=2,
+        pullback_fastline_tolerance=0.03,
+        pullback_volume_ratio=0.75,
+        restart_volume_multiplier=1.2,
+    ).generate(context)
+
+    assert signal.signal_type == SignalType.LONG
+    assert signal.metadata["breakout_close"] == 11.1
+    assert signal.metadata["restart_volume"] == 1500
 
 
 def test_volume_pullback_breakout_signal_generates_long_signal():

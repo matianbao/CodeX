@@ -144,3 +144,94 @@ class VolumePullbackBreakoutSignalModel(SignalModel):
             return Signal(symbol=context.symbol, signal_type=SignalType.EXIT, score=-1.0, metadata={"reason": "stop_loss"})
 
         return Signal(symbol=context.symbol, signal_type=SignalType.HOLD, score=score)
+
+
+class ThemeStrongGPullbackSignalModel(SignalModel):
+    """题材+强势股低吸：强趋势中回踩快线后再启动买入。"""
+
+    def __init__(
+        self,
+        fast_window: int = 3,
+        slow_window: int = 8,
+        strong_lookback: int = 10,
+        breakout_return_threshold: float = 0.05,
+        breakout_volume_multiplier: float = 1.5,
+        pullback_bars: int = 2,
+        pullback_fastline_tolerance: float = 0.02,
+        pullback_volume_ratio: float = 0.75,
+        restart_volume_multiplier: float = 1.2,
+        stop_loss_pct: float = 0.03,
+    ) -> None:
+        if fast_window >= slow_window:
+            raise ValueError("fast_window must be smaller than slow_window")
+        self.fast_window = fast_window
+        self.slow_window = slow_window
+        self.strong_lookback = strong_lookback
+        self.breakout_return_threshold = breakout_return_threshold
+        self.breakout_volume_multiplier = breakout_volume_multiplier
+        self.pullback_bars = pullback_bars
+        self.pullback_fastline_tolerance = pullback_fastline_tolerance
+        self.pullback_volume_ratio = pullback_volume_ratio
+        self.restart_volume_multiplier = restart_volume_multiplier
+        self.stop_loss_pct = stop_loss_pct
+
+    def compute_signal(self, context: StrategyContext, history) -> Signal:
+        min_bars = max(self.strong_lookback, self.slow_window) + self.pullback_bars
+        if len(history) < min_bars:
+            return Signal(symbol=context.symbol, signal_type=SignalType.HOLD, score=0.0, metadata={"reason": "insufficient_history"})
+
+        current = history[-1]
+        pullback_segment = history[-(self.pullback_bars + 1) : -1]
+        trend_segment = history[-(self.slow_window + self.pullback_bars + 1) : -(self.pullback_bars + 1)]
+
+        fast_ma = safe_mean(bar.close for bar in trend_segment[-self.fast_window :])
+        slow_ma = safe_mean(bar.close for bar in trend_segment[-self.slow_window :])
+        prior_slow_ma = safe_mean(bar.close for bar in trend_segment[: self.slow_window])
+        trend_up = fast_ma > slow_ma and slow_ma >= prior_slow_ma
+
+        strong_candidates = history[: -(self.pullback_bars + 1)][-self.strong_lookback :]
+        breakout_bar = None
+        for idx in range(1, len(strong_candidates)):
+            bar = strong_candidates[idx]
+            prev_bar = strong_candidates[idx - 1]
+            prior = strong_candidates[max(0, idx - self.slow_window) : idx]
+            avg_volume = safe_mean(item.volume for item in prior)
+            ret = (bar.close - prev_bar.close) / prev_bar.close if prev_bar.close else 0.0
+            if avg_volume > 0 and bar.close > bar.open and ret >= self.breakout_return_threshold and bar.volume >= avg_volume * self.breakout_volume_multiplier:
+                breakout_bar = bar
+
+        if not trend_up or breakout_bar is None:
+            return Signal(
+                symbol=context.symbol,
+                signal_type=SignalType.HOLD,
+                score=0.0,
+                metadata={"reason": "trend_or_breakout_missing"},
+            )
+
+        pullback_price_ok = all(abs(bar.close - fast_ma) / fast_ma <= self.pullback_fastline_tolerance for bar in pullback_segment if fast_ma > 0)
+        pullback_support_ok = all(bar.low >= slow_ma * (1 - self.pullback_fastline_tolerance) for bar in pullback_segment)
+        pullback_volume_ok = all(bar.volume <= breakout_bar.volume * self.pullback_volume_ratio for bar in pullback_segment)
+
+        restart_price_ok = current.close > max(bar.high for bar in pullback_segment)
+        restart_volume_ok = current.volume >= pullback_segment[-1].volume * self.restart_volume_multiplier
+
+        score = (current.close - slow_ma) / slow_ma if slow_ma else 0.0
+        if pullback_price_ok and pullback_support_ok and pullback_volume_ok and restart_price_ok and restart_volume_ok:
+            return Signal(
+                symbol=context.symbol,
+                signal_type=SignalType.LONG,
+                score=score,
+                metadata={
+                    "fast_ma": fast_ma,
+                    "slow_ma": slow_ma,
+                    "breakout_close": breakout_bar.close,
+                    "restart_volume": current.volume,
+                },
+            )
+
+        position = context.account.get_position(context.symbol)
+        stop_price = slow_ma * (1 - self.stop_loss_pct)
+        if position.qty > 0 and current.close < stop_price:
+            return Signal(symbol=context.symbol, signal_type=SignalType.EXIT, score=-1.0, metadata={"reason": "slow_line_stop_loss"})
+
+        return Signal(symbol=context.symbol, signal_type=SignalType.HOLD, score=score, metadata={"reason": "waiting_restart"})
