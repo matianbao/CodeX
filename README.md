@@ -1,0 +1,356 @@
+# Python 量化回测框架（最小可演进版本）
+
+这是一个面向研究和演进的 **Python 量化回测框架最小实现**。
+
+它的目标不是一开始做成“大而全平台”，而是先把下面四件事做扎实：
+
+1. **数据访问**：对上层统一暴露标准化行情对象。
+2. **策略表达**：把信号、仓位、风控拆成可组合模块。
+3. **执行仿真**：订单、成交、账户、持仓解耦建模。
+4. **回测编排**：把数据、策略、执行串成可运行闭环。
+
+当前仓库已经提供：
+
+- 基础量化框架代码 `quant/`
+- 一套“**放量上涨 -> 缩量回踩 -> 启动买入**”示例策略
+- 一个可直接运行的 mock 回测示例
+- SVG/HTML 可视化报告输出
+- 基于 `pytest` 的自动化测试
+
+---
+
+## 1. 项目结构
+
+```text
+.
+├── docs/
+│   └── architecture.md          # 架构设计说明
+├── examples/
+│   └── run_volume_pullback_backtest.py
+├── quant/
+│   ├── backtest/
+│   ├── common/
+│   ├── data/
+│   ├── execution/
+│   └── strategy/
+├── tests/
+│   └── test_quant_framework.py
+├── pyproject.toml
+└── README.md
+```
+
+---
+
+## 2. 核心模块说明
+
+### 2.1 数据层 `quant.data`
+
+负责提供统一标准化的行情数据接口：
+
+- `DataSource`：数据源抽象接口
+- `MockDataSource` / `InMemoryDataSource`：用于测试与示例
+- `AShareDailyDataSource`：A 股日线数据源实现
+- `DataRepository`：统一数据访问门面
+- `Bar`：标准 K 线结构
+
+> 当前建议在开发和测试阶段优先使用 `MockDataSource`，将网络和外部依赖隔离出去。
+
+### 2.2 策略层 `quant.strategy`
+
+负责生成交易意图，而不是直接改账户：
+
+- `SignalModel`：信号模型抽象
+- `MovingAverageCrossSignalModel`：均线信号示例
+- `VolumePullbackBreakoutSignalModel`：放量上涨-缩量回踩-启动买入策略
+- `FixedSizePositionSizer`：固定数量仓位模型
+- `RiskRuleChain`：风控规则链
+- `Strategy`：策略聚合门面
+- `LatestSignalScreener`：在股票池上扫描最新满足策略条件的股票列表
+
+### 2.3 执行层 `quant.execution`
+
+负责把“交易意图”落到账户：
+
+- `OrderRequest` / `Order` / `Fill`
+- `Position` / `Account`
+- `SimulatedBroker`
+- `CommissionModel` / `SlippageModel` / `ExecutionPolicy`
+
+### 2.4 回测层 `quant.backtest`
+
+负责编排主流程并产出结果：
+
+- `Scheduler`
+- `BacktestEngine`
+- `BacktestResult`
+- `Analyzer`
+- `BacktestVisualizer`
+
+---
+
+## 3. 当前支持的回测链路
+
+当前已经可以跑通下面这条主链路：
+
+```text
+MockDataSource -> DataRepository -> Strategy -> Broker -> BacktestEngine -> Analyzer -> Visualizer
+```
+
+也就是：
+
+```text
+数据 -> 信号 -> 仓位 -> 风控 -> 执行 -> 账户更新 -> 结果分析 -> 可视化报告
+```
+
+---
+
+## 4. 快速开始
+
+### 4.1 安装依赖
+
+本项目目前依赖非常轻，直接使用本地 Python 环境即可：
+
+```bash
+python -m pip install -U pip pytest
+```
+
+### 4.2 运行测试
+
+```bash
+pytest -q
+```
+
+### 4.3 运行示例回测
+
+```bash
+python examples/run_volume_pullback_backtest.py
+```
+
+### 4.4 运行全链路调试函数
+
+如果你想直接观察每个时间点经过“数据 -> 信号 -> 仓位 -> 订单 -> 成交 -> 净值”的中间输出，可以执行：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_debug_demo
+
+analysis, trace_steps = run_debug_demo(print_trace=True)
+print(analysis)
+print(trace_steps[-1])
+PY
+```
+
+这个调试入口会打印每一步的：
+
+- 当前 bar 收盘价
+- 历史窗口长度
+- 信号类型与分数
+- 原始目标仓位
+- 风控后的最终仓位
+- 订单数量
+- 成交结果
+- 当前净值
+
+### 4.5 扫描最新满足策略要求的 A 股列表
+
+现在可以直接扫描最近 N 个月（默认 3 个月，可配置）的 A 股日线数据，并返回**最新满足策略要求的股票列表**：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_latest_signal_scan
+
+results = run_latest_signal_scan(lookback_months=3, selected_only=True)
+for item in results[:10]:
+    print(item)
+PY
+```
+
+这个入口会：
+
+- 在数据层自动抓取当前 A 股股票池
+- 对每个标的拉取最近 `lookback_months` 个月日线
+- 在策略层仅评估最新一个交易日
+- 返回满足策略条件的股票列表
+
+返回结果示例：
+
+```python
+{
+    "symbol": "000001",
+    "dt": datetime(...),
+    "signal_type": "LONG",
+    "signal_score": 0.0135,
+    "latest_close": 11.25,
+    "order_count": 1,
+    "selected": True,
+}
+```
+
+常用参数：
+
+- `lookback_months`：最近几个月的数据窗口，默认 `3`
+- `symbols`：可传入自定义股票池；不传则自动抓取当前 A 股股票列表
+- `selected_only`：是否仅返回满足条件的股票，默认 `True`
+- `enable_logging`：是否输出 INFO 日志，默认 `True`
+
+如果你只想扫描指定股票池，也可以这样运行：
+
+```bash
+python - <<'PY'
+from examples.run_volume_pullback_backtest import run_latest_signal_scan
+
+results = run_latest_signal_scan(
+    lookback_months=6,
+    symbols=["000001", "000333", "600519"],
+    selected_only=False,
+)
+for item in results:
+    print(item)
+PY
+```
+
+> 注意：A 股在线数据依赖外部接口可用性与访问频率限制；开发/测试场景仍建议优先使用 `MockDataSource` 或本地 CSV。
+
+### 4.6 日志输出
+
+关键环节现在都增加了日志输出，包括：
+
+- 数据读取与缓存命中
+- 策略开始执行、信号生成、仓位决策、风控结果
+- Broker 收单、成交、账户资金与持仓变化
+- 回测每一步开始/结束、分析完成
+- 调试器 trace 步骤汇总
+- 报告保存位置
+
+直接运行示例时会自动开启 INFO 级别日志。
+
+
+运行后会输出：
+
+- 回测分析指标 `analysis`
+- 成交结果 `fills`
+- HTML 报告路径
+- SVG 净值图路径
+
+默认生成目录：
+
+```text
+artifacts/
+├── volume_pullback_report.html
+└── volume_pullback_report_equity.svg
+```
+
+---
+
+## 5. 示例策略说明
+
+内置示例策略是：
+
+### **放量上涨 -> 缩量回踩 -> 启动买入**
+
+大致逻辑：
+
+1. 先识别一个 **放量上涨 breakout bar**
+2. 随后出现 **缩量回踩 pullback 段**
+3. 当价格重新向上突破且量能恢复时，给出 `LONG`
+4. 若持仓后跌破容忍阈值，可给出 `EXIT`
+
+该策略目前主要用于：
+
+- 验证策略层抽象是否可运行
+- 验证回测引擎、执行引擎、可视化是否闭环
+- 给后续替换成真实策略提供模板
+
+---
+
+## 6. 可视化能力
+
+当前已经实现两类结果展示：
+
+### 6.1 SVG 图片
+
+`BacktestVisualizer.render_equity_svg(...)`
+
+输出净值曲线 SVG，可用于：
+
+- 文档嵌入
+- 报告生成
+- CI 产物保存
+
+### 6.2 HTML 报告
+
+`BacktestVisualizer.save_report(...)`
+
+输出一个自包含 HTML 报告，内容包括：
+
+- 指标卡片（收益、回撤、交易次数等）
+- 净值曲线
+- 成交表格
+
+这适合本地查看，也适合后续扩展成更完整的交互式回测界面。
+
+---
+
+## 7. 数据源选择建议
+
+仓库当前已经开始把数据获取模块做成多数据源结构，优先支持：
+
+- `MockDataSource`：开发与测试
+- `CsvDataSource`：本地历史回测
+- `AShareDailyDataSource`：轻量 A 股在线拉取
+- `TushareDailyDataSource`：更规范的 A 股数据接口
+- `DataSourceFactory`：统一创建入口
+- `FallbackDataSource`：本地优先、线上兜底
+
+更详细的对比和选择说明见 `docs/data_sources.md`。
+
+---
+
+## 7. 测试覆盖范围
+
+当前测试主要覆盖：
+
+- mock 数据源与数据仓库
+- A 股数据源解析（使用 mock 响应）
+- 均线信号模型
+- 放量回踩策略信号模型
+- 仓位模型和风控链
+- Broker / Account / Position / Fill
+- 回测引擎端到端流程
+- 可视化报告输出
+- 示例脚本 `run_demo()`
+
+---
+
+## 8. 当前限制
+
+这个仓库目前是 **MVP 版本**，还没有做下面这些增强：
+
+- 多标的统一组合管理
+- 更复杂的成交规则（如 next open / VWAP / 成交量约束）
+- 更完整的绩效分析（Sharpe、Calmar、胜率、换手率等）
+- 参数搜索 / 批量回测
+- Web UI
+- 实盘接入
+
+另外，A 股在线数据抓取逻辑虽然已经实现，但在测试中仍建议通过 mock 来保证稳定性。
+
+---
+
+## 9. 后续建议演进方向
+
+如果你准备把这个框架继续往前推进，建议优先做：
+
+1. **本地缓存层**：CSV / Parquet
+2. **更完整的 Analyzer**：收益风险指标体系
+3. **策略参数化**：统一配置输入
+4. **组合回测**：多标的、多策略
+5. **结果展示升级**：更强的交互式页面或 notebook 组件
+
+---
+
+## 10. 一句话总结
+
+这套框架现在适合做的事情是：
+
+> 用最少但清晰的模块，把“数据、策略、执行、回测、可视化”先跑通，然后再逐步演进。
